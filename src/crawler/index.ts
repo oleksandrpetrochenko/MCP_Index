@@ -6,6 +6,7 @@ import { GitHubCrawler } from "./github-crawler.js";
 import { NpmCrawler } from "./npm-crawler.js";
 import { AwesomeListCrawler } from "./awesome-list-crawler.js";
 import { RegistryCrawler } from "./registry-crawler.js";
+import { OfficialRegistryCrawler } from "./official-registry-crawler.js";
 import { CustomUrlCrawler } from "./custom-url-crawler.js";
 
 const log = createChildLogger("crawler-orchestrator");
@@ -20,6 +21,8 @@ function createCrawler(type: string, config: Record<string, unknown>): BaseCrawl
       return new AwesomeListCrawler(config as any);
     case "registry":
       return new RegistryCrawler(config as any);
+    case "official-registry":
+      return new OfficialRegistryCrawler(config as any);
     case "custom-url":
       return new CustomUrlCrawler(config as any);
     default:
@@ -99,5 +102,6 @@ export {
   NpmCrawler,
   AwesomeListCrawler,
   RegistryCrawler,
+  OfficialRegistryCrawler,
   CustomUrlCrawler,
 };

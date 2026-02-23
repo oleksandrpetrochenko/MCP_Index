@@ -2,24 +2,40 @@ import { z } from "zod/v4";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { serverRepo } from "../db/server-repo.js";
 import { categoryRepo } from "../db/category-repo.js";
+import { promotionEngine } from "../ads/promotion-engine.js";
+import { promotionRepo } from "../db/promotion-repo.js";
 
 export function registerTools(server: McpServer): void {
   server.tool(
     "search_servers",
-    "Search the MCP server index. Returns servers matching a query, optionally filtered by category and sorted by quality, stars, downloads, recency, or name.",
+    "Search the MCP server index. Returns servers matching a query, optionally filtered by category and sorted by quality, stars, downloads, recency, or name. Pass a partnerKey to receive promoted (sponsored) results.",
     {
       query: z.string().optional().describe("Search query to match against server names"),
       category: z.string().optional().describe("Category slug to filter by (e.g. 'developer-tools')"),
       sortBy: z.enum(["quality", "stars", "downloads", "recent", "name"]).optional().describe("Sort order"),
       limit: z.number().min(1).max(50).optional().describe("Max results (default 20)"),
+      partnerKey: z.string().optional().describe("Partner API key to receive promoted results with revenue sharing"),
     },
-    async ({ query, category, sortBy, limit }) => {
+    async ({ query, category, sortBy, limit, partnerKey }) => {
       let categoryId: string | undefined;
+      let categorySlug: string | undefined;
       if (category) {
         const cat = await categoryRepo.findBySlug(category);
         categoryId = cat?.id;
+        categorySlug = cat?.slug;
       }
 
+      // Get promoted results if partner key provided
+      const promoted = await promotionEngine.getPromotedResults({
+        query,
+        categorySlug,
+        partnerKey,
+        limit: 2,
+      });
+
+      const promotedMarkdown = promotionEngine.formatPromotedMarkdown(promoted);
+
+      // Get organic results
       const result = await serverRepo.list({
         search: query,
         categoryId,
@@ -27,7 +43,7 @@ export function registerTools(server: McpServer): void {
         limit: limit ?? 20,
       });
 
-      const text = result.items
+      const organicText = result.items
         .map((s) => {
           const cat = s.category ? ` [${s.category.name}]` : "";
           return `- **${s.name}**${cat} (score: ${s.qualityScore}, stars: ${s.stars || 0}, downloads: ${s.weeklyDownloads || 0})\n  ${s.description || "No description"}\n  Slug: \`${s.slug}\``;
@@ -38,7 +54,7 @@ export function registerTools(server: McpServer): void {
         content: [
           {
             type: "text" as const,
-            text: `Found ${result.total} servers${query ? ` matching "${query}"` : ""}:\n\n${text}`,
+            text: `Found ${result.total} servers${query ? ` matching "${query}"` : ""}:\n\n${promotedMarkdown}${organicText}`,
           },
         ],
       };
@@ -50,8 +66,9 @@ export function registerTools(server: McpServer): void {
     "Get full details of a specific MCP server by its slug, including its tools, resources, and prompts.",
     {
       slug: z.string().describe("The server's unique slug identifier"),
+      partnerKey: z.string().optional().describe("Partner API key for click attribution"),
     },
-    async ({ slug }) => {
+    async ({ slug, partnerKey }) => {
       const s = await serverRepo.findBySlug(slug);
       if (!s) {
         return {
@@ -59,6 +76,9 @@ export function registerTools(server: McpServer): void {
           isError: true,
         };
       }
+
+      // Implicit click tracking — fire-and-forget
+      trackImplicitClick(slug, partnerKey).catch(() => {});
 
       const lines = [
         `# ${s.name}`,
@@ -140,4 +160,57 @@ export function registerTools(server: McpServer): void {
       };
     },
   );
+
+  server.tool(
+    "report_ad_interaction",
+    "Report an interaction with a promoted (sponsored) MCP server. Use this to explicitly track clicks and engagement for revenue attribution.",
+    {
+      serverSlug: z.string().describe("Slug of the server that was interacted with"),
+      promotionId: z.string().optional().describe("Promotion ID from the sponsored result"),
+      impressionId: z.string().optional().describe("Impression ID if available"),
+      interactionType: z.enum(["view", "install", "link_click"]).optional().describe("Type of interaction"),
+      partnerKey: z.string().optional().describe("Partner API key for revenue attribution"),
+    },
+    async ({ serverSlug, promotionId, impressionId, interactionType, partnerKey }) => {
+      if (!promotionId) {
+        return {
+          content: [{ type: "text" as const, text: "No promotionId provided — interaction not tracked." }],
+        };
+      }
+
+      await promotionEngine.recordClick({
+        promotionId,
+        serverSlug,
+        partnerKey,
+        impressionId,
+        clickType: interactionType || "detail",
+      });
+
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: `Interaction recorded for server \`${serverSlug}\` (type: ${interactionType || "detail"}).`,
+          },
+        ],
+      };
+    },
+  );
+}
+
+/**
+ * Implicit click tracking for get_server.
+ * Checks if the requested server has an active promotion and records a click.
+ */
+async function trackImplicitClick(serverSlug: string, partnerKey?: string) {
+  const matches = await promotionRepo.findMatchingPromotions({ limit: 1 });
+  const match = matches.find((m) => m.server.slug === serverSlug);
+  if (!match) return;
+
+  await promotionEngine.recordClick({
+    promotionId: match.promotion.id,
+    serverSlug,
+    partnerKey,
+    clickType: "detail",
+  });
 }

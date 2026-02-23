@@ -4,6 +4,8 @@ import { runCrawlForSource, runAllCrawls } from "../../crawler/index.js";
 import { jobRepo } from "../../db/source-repo.js";
 import { getCrawlQueue } from "../../scheduler/index.js";
 import { scoreAllServers } from "../../scoring/index.js";
+import { partnerRepo } from "../../db/partner-repo.js";
+import { advertiserRepo } from "../../db/advertiser-repo.js";
 
 export async function adminRoutes(app: FastifyInstance): Promise<void> {
   // Simple API key auth for admin routes
@@ -76,4 +78,66 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
 
     return reply.send(job);
   });
+
+  // ── Partner Management ──────────────────────────────────────────
+
+  // List all partners
+  app.get("/partners", async () => {
+    const partners = await partnerRepo.listAll();
+    return { partners };
+  });
+
+  // Approve/suspend a partner
+  app.patch<{ Params: { id: string }; Body: { status: string } }>(
+    "/partners/:id",
+    async (request, reply) => {
+      const { id } = request.params;
+      const { status } = request.body || {};
+
+      if (!status || !["active", "suspended", "pending"].includes(status)) {
+        return reply
+          .code(400)
+          .send({ error: "status must be 'active', 'suspended', or 'pending'" });
+      }
+
+      const partner = await partnerRepo.findById(id);
+      if (!partner) {
+        return reply.code(404).send({ error: "Partner not found" });
+      }
+
+      await partnerRepo.updateStatus(id, status);
+      return { id, status };
+    },
+  );
+
+  // ── Advertiser Management ───────────────────────────────────────
+
+  // List all advertisers
+  app.get("/advertisers", async () => {
+    const advs = await advertiserRepo.listAll();
+    return { advertisers: advs };
+  });
+
+  // Approve/suspend an advertiser
+  app.patch<{ Params: { id: string }; Body: { status: string } }>(
+    "/advertisers/:id",
+    async (request, reply) => {
+      const { id } = request.params;
+      const { status } = request.body || {};
+
+      if (!status || !["active", "suspended", "pending"].includes(status)) {
+        return reply
+          .code(400)
+          .send({ error: "status must be 'active', 'suspended', or 'pending'" });
+      }
+
+      const advertiser = await advertiserRepo.findById(id);
+      if (!advertiser) {
+        return reply.code(404).send({ error: "Advertiser not found" });
+      }
+
+      await advertiserRepo.updateStatus(id, status);
+      return { id, status };
+    },
+  );
 }

@@ -1,6 +1,6 @@
 export interface CrawlSourceConfig {
   name: string;
-  type: "github" | "npm" | "awesome-list" | "registry" | "custom-url";
+  type: "github" | "npm" | "awesome-list" | "registry" | "official-registry" | "custom-url";
   enabled: boolean;
   schedule: string; // cron expression
   config: Record<string, unknown>;
@@ -44,6 +44,17 @@ export const defaultSources: CrawlSourceConfig[] = [
         "https://raw.githubusercontent.com/punkpeye/awesome-mcp-servers/main/README.md",
         "https://raw.githubusercontent.com/modelcontextprotocol/servers/main/README.md",
       ],
+    },
+  },
+  {
+    name: "official-mcp-registry",
+    type: "official-registry",
+    enabled: true,
+    schedule: "0 */12 * * *", // every 12 hours
+    config: {
+      baseUrl: "https://registry.modelcontextprotocol.io",
+      limit: 100,
+      maxPages: 500,
     },
   },
 ];

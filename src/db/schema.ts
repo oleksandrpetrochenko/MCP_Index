@@ -179,3 +179,205 @@ export const crawlJobsRelations = relations(crawlJobs, ({ one }) => ({
     references: [crawlSources.id],
   }),
 }));
+
+// ── Advertisers ────────────────────────────────────────────────────
+export const advertisers = pgTable(
+  "advertisers",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    name: varchar("name", { length: 255 }).notNull(),
+    email: varchar("email", { length: 255 }).notNull(),
+    apiKey: varchar("api_key", { length: 64 }).notNull(),
+    status: varchar("status", { length: 20 }).notNull().default("pending"), // active | suspended | pending
+    billingExternalId: varchar("billing_external_id", { length: 255 }), // LemonSqueezy customer ID
+    metadata: jsonb("metadata").$type<Record<string, unknown>>(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("advertisers_email_idx").on(table.email),
+    uniqueIndex("advertisers_api_key_idx").on(table.apiKey),
+  ],
+);
+
+export const advertisersRelations = relations(advertisers, ({ many }) => ({
+  promotions: many(promotions),
+}));
+
+// ── Promotions ─────────────────────────────────────────────────────
+export const promotions = pgTable(
+  "promotions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    advertiserId: uuid("advertiser_id")
+      .notNull()
+      .references(() => advertisers.id),
+    serverId: uuid("server_id")
+      .notNull()
+      .references(() => mcpServers.id),
+    status: varchar("status", { length: 20 }).notNull().default("active"), // active | paused | exhausted | expired
+    dailyBudgetCents: integer("daily_budget_cents").notNull().default(500), // $5/day default
+    totalBudgetCents: integer("total_budget_cents").notNull().default(15000), // $150 default
+    spentCents: integer("spent_cents").notNull().default(0),
+    costPerImpressionCents: integer("cost_per_impression_cents").notNull().default(1), // $0.01
+    costPerClickCents: integer("cost_per_click_cents").notNull().default(10), // $0.10
+    targetCategories: jsonb("target_categories").$type<string[]>(), // category slugs
+    targetKeywords: jsonb("target_keywords").$type<string[]>(), // keyword matches
+    priority: integer("priority").notNull().default(0), // higher = shown first
+    startsAt: timestamp("starts_at").defaultNow().notNull(),
+    expiresAt: timestamp("expires_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("promotions_advertiser_idx").on(table.advertiserId),
+    index("promotions_server_idx").on(table.serverId),
+    index("promotions_status_idx").on(table.status),
+  ],
+);
+
+export const promotionsRelations = relations(promotions, ({ one, many }) => ({
+  advertiser: one(advertisers, {
+    fields: [promotions.advertiserId],
+    references: [advertisers.id],
+  }),
+  server: one(mcpServers, {
+    fields: [promotions.serverId],
+    references: [mcpServers.id],
+  }),
+  impressions: many(adImpressions),
+  clicks: many(adClicks),
+  ledgerEntries: many(revenueLedger),
+}));
+
+// ── Partner Platforms ──────────────────────────────────────────────
+export const partnerPlatforms = pgTable(
+  "partner_platforms",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    name: varchar("name", { length: 255 }).notNull(),
+    contactEmail: varchar("contact_email", { length: 255 }).notNull(),
+    apiKey: varchar("api_key", { length: 64 }).notNull(),
+    revenueSharePercent: integer("revenue_share_percent").notNull().default(20),
+    status: varchar("status", { length: 20 }).notNull().default("pending"), // pending | active | suspended
+    tier: varchar("tier", { length: 20 }).notNull().default("free"), // free | basic | premium
+    includePromoted: boolean("include_promoted").default(false).notNull(),
+    callbackUrl: text("callback_url"),
+    billingExternalId: varchar("billing_external_id", { length: 255 }),
+    metadata: jsonb("metadata").$type<Record<string, unknown>>(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("partner_platforms_api_key_idx").on(table.apiKey),
+    index("partner_platforms_status_idx").on(table.status),
+  ],
+);
+
+export const partnerPlatformsRelations = relations(partnerPlatforms, ({ many }) => ({
+  impressions: many(adImpressions),
+  clicks: many(adClicks),
+  ledgerEntries: many(revenueLedger),
+}));
+
+// ── Ad Impressions ─────────────────────────────────────────────────
+export const adImpressions = pgTable(
+  "ad_impressions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    promotionId: uuid("promotion_id")
+      .notNull()
+      .references(() => promotions.id),
+    partnerPlatformId: uuid("partner_platform_id").references(() => partnerPlatforms.id),
+    sessionId: varchar("session_id", { length: 255 }),
+    searchQuery: text("search_query"),
+    position: integer("position").notNull().default(0), // 0-indexed position in results
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("ad_impressions_promotion_idx").on(table.promotionId),
+    index("ad_impressions_partner_idx").on(table.partnerPlatformId),
+    index("ad_impressions_created_idx").on(table.createdAt),
+  ],
+);
+
+export const adImpressionsRelations = relations(adImpressions, ({ one }) => ({
+  promotion: one(promotions, {
+    fields: [adImpressions.promotionId],
+    references: [promotions.id],
+  }),
+  partnerPlatform: one(partnerPlatforms, {
+    fields: [adImpressions.partnerPlatformId],
+    references: [partnerPlatforms.id],
+  }),
+}));
+
+// ── Ad Clicks ──────────────────────────────────────────────────────
+export const adClicks = pgTable(
+  "ad_clicks",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    impressionId: uuid("impression_id").references(() => adImpressions.id),
+    promotionId: uuid("promotion_id")
+      .notNull()
+      .references(() => promotions.id),
+    partnerPlatformId: uuid("partner_platform_id").references(() => partnerPlatforms.id),
+    serverSlug: varchar("server_slug", { length: 255 }).notNull(),
+    clickType: varchar("click_type", { length: 20 }).notNull().default("detail"), // detail | install | link | callback
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("ad_clicks_promotion_idx").on(table.promotionId),
+    index("ad_clicks_partner_idx").on(table.partnerPlatformId),
+    index("ad_clicks_created_idx").on(table.createdAt),
+  ],
+);
+
+export const adClicksRelations = relations(adClicks, ({ one }) => ({
+  impression: one(adImpressions, {
+    fields: [adClicks.impressionId],
+    references: [adImpressions.id],
+  }),
+  promotion: one(promotions, {
+    fields: [adClicks.promotionId],
+    references: [promotions.id],
+  }),
+  partnerPlatform: one(partnerPlatforms, {
+    fields: [adClicks.partnerPlatformId],
+    references: [partnerPlatforms.id],
+  }),
+}));
+
+// ── Revenue Ledger ─────────────────────────────────────────────────
+export const revenueLedger = pgTable(
+  "revenue_ledger",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    promotionId: uuid("promotion_id")
+      .notNull()
+      .references(() => promotions.id),
+    partnerPlatformId: uuid("partner_platform_id").references(() => partnerPlatforms.id),
+    eventType: varchar("event_type", { length: 20 }).notNull(), // impression | click | payout | refund
+    grossAmountCents: integer("gross_amount_cents").notNull(),
+    partnerShareCents: integer("partner_share_cents").notNull().default(0),
+    netAmountCents: integer("net_amount_cents").notNull(),
+    referenceId: uuid("reference_id"), // points to impression or click ID
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("revenue_ledger_promotion_idx").on(table.promotionId),
+    index("revenue_ledger_partner_idx").on(table.partnerPlatformId),
+    index("revenue_ledger_created_idx").on(table.createdAt),
+  ],
+);
+
+export const revenueLedgerRelations = relations(revenueLedger, ({ one }) => ({
+  promotion: one(promotions, {
+    fields: [revenueLedger.promotionId],
+    references: [promotions.id],
+  }),
+  partnerPlatform: one(partnerPlatforms, {
+    fields: [revenueLedger.partnerPlatformId],
+    references: [partnerPlatforms.id],
+  }),
+}));
